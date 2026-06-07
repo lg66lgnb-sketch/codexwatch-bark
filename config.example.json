@@ -1,0 +1,10 @@
+{
+  "bark_server": "https://api.day.app",
+  "bark_key": "YOUR_BARK_KEY",
+  "group": "CodexWatch",
+  "permission_group": "Codex Approval",
+  "done_group": "Codex Done",
+  "level": "timeSensitive",
+  "icon_url": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest/light/codex-color.png",
+  "done_cooldown_seconds": 30
+}
