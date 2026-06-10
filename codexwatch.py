@@ -279,6 +279,11 @@ def label_from_user_message(message: str) -> str:
     marker = "## My request for Codex:"
     if marker in text:
         text = text.split(marker, 1)[1]
+    for notification_marker in ["Codex finished:", "Codex needs you:", "Thread:", "Status:"]:
+        index = text.find(notification_marker)
+        if index > 0:
+            text = text[:index].strip()
+            break
     lines = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -397,12 +402,6 @@ def title_with_context(base: str, context: str) -> str:
     return short_text(f"{base}: {context}", 90)
 
 
-def body_with_context(context: str, body: str) -> str:
-    if not context:
-        return body
-    return f"Thread: {context}\n{body}"
-
-
 def extract_tool_summary(payload: dict[str, Any]) -> str:
     tool_name = first_string(payload, ["tool_name", "tool", "tool_use.name", "name"])
     tool_input = payload.get("tool_input") or payload.get("input") or {}
@@ -438,6 +437,12 @@ def extract_done_summary(payload: dict[str, Any]) -> str:
     return "ready for review"
 
 
+def done_body(summary: str) -> str:
+    if summary == "ready for review":
+        return "Ready for review."
+    return f"Summary: {summary}"
+
+
 def build_message(event: str, stdin_text: str) -> tuple[str, str]:
     payload = parse_stdin_payload(stdin_text)
     context = extract_context_label(payload, stdin_text)
@@ -445,13 +450,13 @@ def build_message(event: str, stdin_text: str) -> tuple[str, str]:
         summary = extract_tool_summary(payload)
         return (
             title_with_context("Codex needs you", context),
-            body_with_context(context, f"Waiting for approval: {summary}\nCome back and choose Allow / Yes."),
+            f"Approval: {summary}\nOpen Codex to allow or deny.",
         )
     if event == "done":
         summary = extract_done_summary(payload)
         return (
             title_with_context("Codex finished", context),
-            body_with_context(context, f"Codex is ready for review.\nStatus: {summary}"),
+            done_body(summary),
         )
     if event == "test":
         return ("CodexWatch test", "If this appears on your iPhone or Apple Watch, the Bark bridge is working.")
