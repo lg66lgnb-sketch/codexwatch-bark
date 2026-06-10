@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent
 CONFIG_FILE = ROOT / "config.json"
 STATE_FILE = ROOT / "state.json"
 LOG_FILE = ROOT / "events.jsonl"
+SESSION_PATH_PATTERN = re.compile(r"(?:~|/)[^\s\"']*\.codex/sessions/[^\s\"']+?\.jsonl")
 
 DEFAULT_CONFIG = {
     "bark_server": "https://api.day.app",
@@ -178,7 +179,7 @@ def looks_like_internal(value: str) -> bool:
         return True
     if re.fullmatch(r"[0-9a-fA-F]{24,}", value):
         return True
-    if re.fullmatch(r"[A-Za-z0-9_-]{24,}", value) and not any(ch.isspace() for ch in value):
+    if re.fullmatch(r"[A-Za-z0-9_]{24,}", value) and any(ch.isdigit() for ch in value):
         return True
     if ".codex/sessions/" in value or "/codex/sessions/" in value:
         return True
@@ -191,17 +192,215 @@ def looks_like_internal(value: str) -> bool:
     return False
 
 
+def clean_label(value: str, limit: int = 80) -> str:
+    value = " ".join(str(value).strip().split())
+    value = value.strip(" -:|")
+    if not value or looks_like_internal(value):
+        return ""
+    if value.startswith("{") or value.startswith("[") or value.startswith("<"):
+        return ""
+    return short_text(value, limit)
+
+
+def basename_label(value: str) -> str:
+    value = str(value).strip()
+    if not value:
+        return ""
+    try:
+        path = Path(value).expanduser()
+    except Exception:
+        return ""
+    name = path.name
+    if not name and path.parent != path:
+        name = path.parent.name
+    return clean_label(name, limit=80)
+
+
+def nested_value(data: dict[str, Any], key: str) -> Any:
+    value: Any = data
+    for part in key.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
 def first_string(data: dict[str, Any], keys: list[str]) -> str:
     for key in keys:
-        value: Any = data
-        for part in key.split("."):
-            if not isinstance(value, dict) or part not in value:
-                value = None
-                break
-            value = value[part]
+        value = nested_value(data, key)
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def first_path_basename(data: dict[str, Any], keys: list[str]) -> str:
+    for key in keys:
+        value = nested_value(data, key)
+        if isinstance(value, str):
+            label = basename_label(value)
+            if label:
+                return label
+    return ""
+
+
+def extract_session_paths(payload: dict[str, Any], stdin_text: str) -> list[Path]:
+    candidates: list[str] = []
+    for key in [
+        "session_path",
+        "transcript_path",
+        "conversation_path",
+        "rollout_path",
+        "log_path",
+        "reason",
+        "status",
+        "message",
+    ]:
+        value = nested_value(payload, key)
+        if isinstance(value, str):
+            candidates.append(value)
+    candidates.extend(flatten_strings(payload))
+    if stdin_text:
+        candidates.append(stdin_text)
+
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        for match in SESSION_PATH_PATTERN.findall(candidate):
+            path = Path(match).expanduser()
+            key = str(path)
+            if key not in seen:
+                paths.append(path)
+                seen.add(key)
+    return paths
+
+
+def label_from_user_message(message: str) -> str:
+    text = message.strip()
+    marker = "## My request for Codex:"
+    if marker in text:
+        text = text.split(marker, 1)[1]
+    lines = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("# Files mentioned"):
+            continue
+        if line.startswith("## ") or line.startswith("<image ") or line.startswith("</image"):
+            continue
+        if line.startswith("![") or line.startswith("<environment_context"):
+            continue
+        if line.startswith("/") and " " not in line:
+            continue
+        lines.append(line)
+    return clean_label(lines[0] if lines else text, limit=80)
+
+
+def session_context_from_file(path: Path) -> tuple[str, str]:
+    if not path.exists() or not path.is_file():
+        return "", ""
+
+    cwd_label = ""
+    latest_user_label = ""
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                if (
+                    '"session_meta"' not in line
+                    and '"turn_context"' not in line
+                    and '"user_message"' not in line
+                    and '"role":"user"' not in line
+                    and '"role": "user"' not in line
+                ):
+                    continue
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+
+                payload = item.get("payload") if isinstance(item, dict) else None
+                if not isinstance(payload, dict):
+                    continue
+
+                if item.get("type") in {"session_meta", "turn_context"}:
+                    cwd = payload.get("cwd")
+                    if isinstance(cwd, str) and not cwd_label:
+                        cwd_label = basename_label(cwd)
+                    continue
+
+                if payload.get("type") == "user_message":
+                    label = label_from_user_message(str(payload.get("message", "")))
+                    if label:
+                        latest_user_label = label
+                    continue
+
+                if payload.get("role") == "user":
+                    content = payload.get("content")
+                    if isinstance(content, list):
+                        parts = []
+                        for part in content:
+                            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                                parts.append(part["text"])
+                        label = label_from_user_message("\n".join(parts))
+                        if label:
+                            latest_user_label = label
+    except Exception:
+        return "", ""
+    return latest_user_label, cwd_label
+
+
+def extract_context_label(payload: dict[str, Any], stdin_text: str) -> str:
+    explicit = first_string(
+        payload,
+        [
+            "conversation_title",
+            "thread_title",
+            "chat_title",
+            "session_title",
+            "project_name",
+            "workspace_name",
+            "title",
+        ],
+    )
+    label = clean_label(explicit)
+    if label:
+        return label
+
+    for path in extract_session_paths(payload, stdin_text):
+        user_label, cwd_label = session_context_from_file(path)
+        if user_label:
+            return user_label
+        if cwd_label:
+            return cwd_label
+
+    label = first_path_basename(
+        payload,
+        [
+            "cwd",
+            "workdir",
+            "working_directory",
+            "workspace",
+            "workspace_root",
+            "project_path",
+            "directory",
+        ],
+    )
+    if label:
+        return label
+
+    return basename_label(str(Path.cwd()))
+
+
+def title_with_context(base: str, context: str) -> str:
+    if not context:
+        return base
+    return short_text(f"{base}: {context}", 90)
+
+
+def body_with_context(context: str, body: str) -> str:
+    if not context:
+        return body
+    return f"Thread: {context}\n{body}"
 
 
 def extract_tool_summary(payload: dict[str, Any]) -> str:
@@ -241,12 +440,19 @@ def extract_done_summary(payload: dict[str, Any]) -> str:
 
 def build_message(event: str, stdin_text: str) -> tuple[str, str]:
     payload = parse_stdin_payload(stdin_text)
+    context = extract_context_label(payload, stdin_text)
     if event == "permission":
         summary = extract_tool_summary(payload)
-        return ("Codex needs you", f"Waiting for approval: {summary}\nCome back and choose Allow / Yes.")
+        return (
+            title_with_context("Codex needs you", context),
+            body_with_context(context, f"Waiting for approval: {summary}\nCome back and choose Allow / Yes."),
+        )
     if event == "done":
         summary = extract_done_summary(payload)
-        return ("Codex finished", f"Codex is ready for review.\nStatus: {summary}")
+        return (
+            title_with_context("Codex finished", context),
+            body_with_context(context, f"Codex is ready for review.\nStatus: {summary}"),
+        )
     if event == "test":
         return ("CodexWatch test", "If this appears on your iPhone or Apple Watch, the Bark bridge is working.")
     summary = "Codex needs attention."

@@ -11,6 +11,7 @@ This is intentionally small: one Python script, one installer, no dependencies b
 - Uses Bark V2 `/push` JSON API.
 - Uses `level=timeSensitive`.
 - Adds a Codex icon by default.
+- Adds a short thread/context label to approval and completion notifications when available.
 - Does not cooldown approval requests, so back-to-back approvals are not missed.
 - Applies a 30-second cooldown to `Stop` notifications to reduce noise.
 
