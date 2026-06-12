@@ -12,5 +12,9 @@ Follow these rules when helping a user install or modify it:
 - Use Bark V2 `/push` JSON API.
 - Keep `PermissionRequest` notifications uncooldowned.
 - Keep `Stop` notifications cooled down with `done_cooldown_seconds`, default 30 seconds.
+- Treat `Stop` notifications as lower-confidence than `PermissionRequest` notifications. Codex Desktop may run internal helper turns that also trigger global `Stop` hooks.
+- Do not use the notifier process directory as a fallback context for `Stop` notifications. It can become a low-signal value such as `app`, especially on Windows.
+- Preserve filtering for internal title-generation prompts and low-signal completion contexts such as app-only internal events; do not filter a real user workspace just because its folder name is `app`. Filtered events should log `skipped_by_filter: true`, send no Bark push, and not refresh the done cooldown.
+- Keep Windows path handling for `.codex\sessions\...` and bare drive-letter paths when filtering internal/session paths.
 - After install, run a test push.
 - Tell the user that already-running Codex sessions may not hot-load hooks; new/restarted sessions may require hook review/trust.

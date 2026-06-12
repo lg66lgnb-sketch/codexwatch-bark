@@ -20,7 +20,27 @@ ROOT = Path(__file__).resolve().parent
 CONFIG_FILE = ROOT / "config.json"
 STATE_FILE = ROOT / "state.json"
 LOG_FILE = ROOT / "events.jsonl"
-SESSION_PATH_PATTERN = re.compile(r"(?:~|/)[^\s\"']*\.codex/sessions/[^\s\"']+?\.jsonl")
+SESSION_PATH_PATTERN = re.compile(
+    r"(?:~|/|[A-Za-z]:[\\/])[^\s\"']*\.codex[\\/]sessions[\\/][^\s\"']+?\.jsonl"
+)
+LOW_SIGNAL_DONE_CONTEXTS = {"app"}
+INTERNAL_PROMPT_MARKERS = (
+    "short title for a task",
+    "generate a concise ui title",
+)
+PATH_CONTEXT_KEYS = [
+    "cwd",
+    "workdir",
+    "working_directory",
+    "workspace",
+    "workspace_root",
+    "project_path",
+    "directory",
+]
+APP_PATH_CONTEXT_KEYS = PATH_CONTEXT_KEYS + [
+    "process_cwd",
+    "current_directory",
+]
 
 DEFAULT_CONFIG = {
     "bark_server": "https://api.day.app",
@@ -173,6 +193,7 @@ def short_text(value: str, limit: int = 180) -> str:
 
 def looks_like_internal(value: str) -> bool:
     value = value.strip()
+    normalized = value.replace("\\", "/")
     if not value:
         return True
     if re.fullmatch(r"[0-9a-fA-F]{8,}(?:-[0-9a-fA-F]{4,}){2,}", value):
@@ -181,13 +202,15 @@ def looks_like_internal(value: str) -> bool:
         return True
     if re.fullmatch(r"[A-Za-z0-9_]{24,}", value) and any(ch.isdigit() for ch in value):
         return True
-    if ".codex/sessions/" in value or "/codex/sessions/" in value:
+    if ".codex/sessions/" in normalized or "/codex/sessions/" in normalized:
         return True
-    if re.search(r"/rollout-[^/\s]+\.jsonl$", value):
+    if re.search(r"/rollout-[^/\s]+\.jsonl$", normalized):
         return True
     if value.startswith("/") and " " not in value:
         return True
     if value.startswith("~") and " " not in value:
+        return True
+    if re.match(r"^[A-Za-z]:/", normalized) and " " not in value:
         return True
     return False
 
@@ -200,6 +223,46 @@ def clean_label(value: str, limit: int = 80) -> str:
     if value.startswith("{") or value.startswith("[") or value.startswith("<"):
         return ""
     return short_text(value, limit)
+
+
+def is_internal_prompt_text(value: str) -> bool:
+    text = " ".join(str(value).lower().split())
+    return any(marker in text for marker in INTERNAL_PROMPT_MARKERS)
+
+
+def is_low_signal_done_context(value: str) -> bool:
+    return value.strip().casefold() in LOW_SIGNAL_DONE_CONTEXTS
+
+
+def looks_like_codex_app_path(value: str) -> bool:
+    normalized = str(value).replace("\\", "/").casefold().rstrip("/")
+    return (
+        "/appdata/local/programs/codex/app" in normalized
+        or "/applications/codex.app" in normalized
+        or normalized.endswith("/codex.app/contents/macos")
+    )
+
+
+def has_non_internal_path_context(payload: dict[str, Any], stdin_text: str) -> bool:
+    for key in PATH_CONTEXT_KEYS:
+        value = nested_value(payload, key)
+        if isinstance(value, str) and basename_label(value) and not looks_like_codex_app_path(value):
+            return True
+
+    for path in extract_session_paths(payload, stdin_text):
+        user_label, cwd_label = session_context_from_file(path)
+        if user_label or cwd_label:
+            return True
+
+    return False
+
+
+def has_codex_app_path_context(payload: dict[str, Any]) -> bool:
+    for key in APP_PATH_CONTEXT_KEYS:
+        value = nested_value(payload, key)
+        if isinstance(value, str) and looks_like_codex_app_path(value):
+            return True
+    return False
 
 
 def basename_label(value: str) -> str:
@@ -297,6 +360,8 @@ def label_from_user_message(message: str) -> str:
             continue
         if line.startswith("/") and " " not in line:
             continue
+        if re.match(r"^[A-Za-z]:[\\/]", line) and " " not in line:
+            continue
         lines.append(line)
     return clean_label(lines[0] if lines else text, limit=80)
 
@@ -354,7 +419,7 @@ def session_context_from_file(path: Path) -> tuple[str, str]:
     return latest_user_label, cwd_label
 
 
-def extract_context_label(payload: dict[str, Any], stdin_text: str) -> str:
+def extract_context_label(payload: dict[str, Any], stdin_text: str, allow_process_cwd_fallback: bool = True) -> str:
     explicit = first_string(
         payload,
         [
@@ -380,20 +445,14 @@ def extract_context_label(payload: dict[str, Any], stdin_text: str) -> str:
 
     label = first_path_basename(
         payload,
-        [
-            "cwd",
-            "workdir",
-            "working_directory",
-            "workspace",
-            "workspace_root",
-            "project_path",
-            "directory",
-        ],
+        PATH_CONTEXT_KEYS,
     )
     if label:
         return label
 
-    return basename_label(str(Path.cwd()))
+    if allow_process_cwd_fallback:
+        return basename_label(str(Path.cwd()))
+    return ""
 
 
 def title_with_context(base: str, context: str) -> str:
@@ -445,7 +504,7 @@ def done_body(summary: str) -> str:
 
 def build_message(event: str, stdin_text: str) -> tuple[str, str]:
     payload = parse_stdin_payload(stdin_text)
-    context = extract_context_label(payload, stdin_text)
+    context = extract_context_label(payload, stdin_text, allow_process_cwd_fallback=event != "done")
     if event == "permission":
         summary = extract_tool_summary(payload)
         return (
@@ -466,6 +525,21 @@ def build_message(event: str, stdin_text: str) -> tuple[str, str]:
         if one_line:
             summary = one_line[:180]
     return ("Codex needs attention", summary)
+
+
+def should_filter_notification(event: str, title: str, payload: dict[str, Any], stdin_text: str) -> bool:
+    if event != "done":
+        return False
+    if any(is_internal_prompt_text(value) for value in flatten_strings(payload)):
+        return True
+    if has_codex_app_path_context(payload):
+        return True
+    context = extract_context_label(payload, stdin_text, allow_process_cwd_fallback=False)
+    if not context:
+        return True
+    if is_low_signal_done_context(context) and not has_non_internal_path_context(payload, stdin_text):
+        return True
+    return False
 
 
 def event_group(event: str, config: dict[str, Any]) -> str:
@@ -509,10 +583,12 @@ def send_bark(title: str, body: str, config: dict[str, Any], group: str | None =
 def cmd_notify(args: argparse.Namespace) -> int:
     config = load_config()
     stdin_text = read_stdin_text()
+    payload = parse_stdin_payload(stdin_text)
     title, body = build_message(args.event, stdin_text)
-    skipped = args.event != "test" and should_cooldown(args.event, config)
+    filtered = should_filter_notification(args.event, title, payload, stdin_text)
+    skipped = (not filtered) and args.event != "test" and should_cooldown(args.event, config)
     group = event_group(args.event, config)
-    ok = False if skipped else send_bark(title, body, config, group=group)
+    ok = False if skipped or filtered else send_bark(title, body, config, group=group)
     log_event(
         {
             "timestamp": now_iso(),
@@ -520,17 +596,20 @@ def cmd_notify(args: argparse.Namespace) -> int:
             "group": group,
             "title": title,
             "body": body,
+            "skipped_by_filter": filtered,
             "skipped_by_cooldown": skipped,
             "sent": ok,
         }
     )
-    if skipped:
+    if filtered:
+        print(f"Skipped by filter: {title}")
+    elif skipped:
         print(f"Skipped by cooldown: {args.event}")
     elif ok:
         print(f"Sent: {title}")
     else:
         print(f"Not sent: {title}", file=sys.stderr)
-    return 0 if ok or skipped else 1
+    return 0 if ok or skipped or filtered else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
