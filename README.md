@@ -14,6 +14,7 @@ This is intentionally small: one Python script, one installer, no dependencies b
 - Adds a short thread/context label to approval and completion notifications when available.
 - Does not cooldown approval requests, so back-to-back approvals are not missed.
 - Applies a 30-second cooldown to `Stop` notifications to reduce noise.
+- Filters low-signal or internal `Stop` events so Codex Desktop helper tasks do not produce misleading completion pushes.
 
 ## Install
 
@@ -38,6 +39,29 @@ The installer:
 - sends a test Bark notification
 
 New or restarted Codex sessions may ask you to review/trust hooks before they run.
+
+## Troubleshooting
+
+### Extra `Codex finished: app` Notifications
+
+Codex Desktop can run internal helper turns, such as UI title generation, that may also fire global `Stop` hooks. On some Windows installs those internal stops can expose only a low-signal context like `app`; older CodexWatch versions used the current process directory as a fallback and could send misleading `Codex finished: app` pushes.
+
+CodexWatch now treats `Stop` notifications more strictly than approval notifications:
+
+- `Stop` notifications must have a real thread/session/workspace context.
+- Internal title-generation prompts are filtered.
+- Low-signal completion contexts such as `app` are filtered only when they are not backed by a real non-internal workspace or session path.
+- Filtered notifications are logged with `skipped_by_filter: true`, do not send Bark pushes, and do not refresh the done cooldown.
+
+If this bug reappears, inspect `~/.codex/codexwatch/events.jsonl` first. A correct filtered event should have `"sent": false` and `"skipped_by_filter": true`.
+
+## Changelog
+
+### 2026-06-12
+
+- Added Windows-aware `.codex/sessions/...` path detection and filtering.
+- Stopped using the notifier process directory as the fallback context for `Stop` notifications.
+- Filtered internal Codex Desktop helper `Stop` events, including low-signal `Codex finished: app` notifications.
 
 ## Test A Real Approval
 
