@@ -14,6 +14,7 @@ Follow these rules when helping a user install or modify it:
 - Keep `Stop` notifications cooled down with `done_cooldown_seconds`, default 30 seconds.
 - Treat `Stop` notifications as lower-confidence than `PermissionRequest` notifications. Codex Desktop may run internal helper turns that also trigger global `Stop` hooks.
 - Do not use the notifier process directory as a fallback context for `Stop` notifications. It can become a low-signal value such as `app`, especially on Windows.
+- Treat Codex install directories as internal app contexts, including Windows packaged paths like `C:\Program Files\WindowsApps\OpenAI.Codex_...\app`.
 - Preserve filtering for internal title-generation prompts and low-signal completion contexts such as app-only internal events; do not filter a real user workspace just because its folder name is `app`. Filtered events should log `skipped_by_filter: true`, send no Bark push, and not refresh the done cooldown.
 - Keep Windows path handling for `.codex\sessions\...` and bare drive-letter paths when filtering internal/session paths.
 - Treat session paths in `Stop` payloads as stale unless at least one referenced session file was modified within `done_session_fresh_seconds`, default 600 seconds. This prevents old project names from being pushed during unrelated active work.

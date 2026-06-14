@@ -47,6 +47,8 @@ New or restarted Codex sessions may ask you to review/trust hooks before they ru
 
 Codex Desktop can run internal helper turns, such as UI title generation, that may also fire global `Stop` hooks. On some Windows installs those internal stops can expose only a low-signal context like `app`; older CodexWatch versions used the current process directory as a fallback and could send misleading `Codex finished: app` pushes.
 
+This is more likely in projectless or file-mentioned Codex Desktop conversations, where internal app-level turns may run with a Codex installation cwd such as `C:\Program Files\WindowsApps\OpenAI.Codex_...\app`.
+
 CodexWatch now treats `Stop` notifications more strictly than approval notifications:
 
 - `Stop` notifications must have a real thread/session/workspace context.
@@ -77,6 +79,7 @@ If you intentionally need a larger window for unusually delayed hooks, raise `do
 - Added stale session-path filtering for `Stop` notifications to prevent cross-thread completion pushes such as `Codex finished: Router VPN` during unrelated work.
 - Added `filter_reason` to local event logs for filtered notifications.
 - Added `done_session_fresh_seconds`, default `600`, to control how fresh a referenced session file must be for completion pushes.
+- Recognized Windows packaged Codex install paths such as `C:\Program Files\WindowsApps\OpenAI.Codex_...\app` as internal app contexts.
 
 ### 2026-06-12
 
