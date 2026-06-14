@@ -15,6 +15,7 @@ This is intentionally small: one Python script, one installer, no dependencies b
 - Does not cooldown approval requests, so back-to-back approvals are not missed.
 - Applies a 30-second cooldown to `Stop` notifications to reduce noise.
 - Filters low-signal or internal `Stop` events so Codex Desktop helper tasks do not produce misleading completion pushes.
+- Filters stale `Stop` events that point at old session files instead of the task that just finished.
 
 ## Install
 
@@ -55,7 +56,27 @@ CodexWatch now treats `Stop` notifications more strictly than approval notificat
 
 If this bug reappears, inspect `~/.codex/codexwatch/events.jsonl` first. A correct filtered event should have `"sent": false` and `"skipped_by_filter": true`.
 
+### Extra `Codex finished: Other Project` Notifications
+
+If a completion notification appears during a different active task and names an unrelated old project, the hook payload may have referenced a stale `.codex/sessions/...` transcript. This can happen even when that other project is not running.
+
+CodexWatch now treats session paths in `Stop` payloads as time-sensitive:
+
+- `done_session_fresh_seconds` defaults to `600`.
+- A `Stop` notification with one or more session paths is sent only if at least one referenced session file was modified within that freshness window.
+- Stale session-path events are logged with `filter_reason: "stale_session_path"`, `skipped_by_filter: true`, and `"sent": false`.
+- Done events also log `session_path_count` and `fresh_session_path_count` without storing full session paths.
+- Filtered stale events do not refresh the done cooldown, so the real completion notification can still be sent normally.
+
+If you intentionally need a larger window for unusually delayed hooks, raise `done_session_fresh_seconds` in `~/.codex/codexwatch/config.json`.
+
 ## Changelog
+
+### 2026-06-14
+
+- Added stale session-path filtering for `Stop` notifications to prevent cross-thread completion pushes such as `Codex finished: Router VPN` during unrelated work.
+- Added `filter_reason` to local event logs for filtered notifications.
+- Added `done_session_fresh_seconds`, default `600`, to control how fresh a referenced session file must be for completion pushes.
 
 ### 2026-06-12
 

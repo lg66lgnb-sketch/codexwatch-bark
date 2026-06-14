@@ -6,5 +6,6 @@
   "done_group": "Codex Done",
   "level": "timeSensitive",
   "icon_url": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest/light/codex-color.png",
-  "done_cooldown_seconds": 30
+  "done_cooldown_seconds": 30,
+  "done_session_fresh_seconds": 600
 }

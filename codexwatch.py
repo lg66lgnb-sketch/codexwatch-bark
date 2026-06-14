@@ -41,6 +41,13 @@ APP_PATH_CONTEXT_KEYS = PATH_CONTEXT_KEYS + [
     "process_cwd",
     "current_directory",
 ]
+SESSION_PATH_KEYS = [
+    "session_path",
+    "transcript_path",
+    "conversation_path",
+    "rollout_path",
+    "log_path",
+]
 
 DEFAULT_CONFIG = {
     "bark_server": "https://api.day.app",
@@ -51,6 +58,7 @@ DEFAULT_CONFIG = {
     "level": "timeSensitive",
     "icon_url": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest/light/codex-color.png",
     "done_cooldown_seconds": 30,
+    "done_session_fresh_seconds": 600,
 }
 
 
@@ -265,6 +273,33 @@ def has_codex_app_path_context(payload: dict[str, Any]) -> bool:
     return False
 
 
+def session_path_age_seconds(path: Path, now: float | None = None) -> float | None:
+    try:
+        modified = path.expanduser().stat().st_mtime
+    except OSError:
+        return None
+    return max(0.0, (time.time() if now is None else now) - modified)
+
+
+def has_fresh_session_path(paths: list[Path], max_age_seconds: int, now: float | None = None) -> bool:
+    if max_age_seconds <= 0:
+        return True
+    return any(
+        age is not None and age <= max_age_seconds
+        for age in (session_path_age_seconds(path, now=now) for path in paths)
+    )
+
+
+def count_fresh_session_paths(paths: list[Path], max_age_seconds: int, now: float | None = None) -> int:
+    if max_age_seconds <= 0:
+        return len(paths)
+    return sum(
+        1
+        for age in (session_path_age_seconds(path, now=now) for path in paths)
+        if age is not None and age <= max_age_seconds
+    )
+
+
 def basename_label(value: str) -> str:
     value = str(value).strip()
     if not value:
@@ -306,18 +341,25 @@ def first_path_basename(data: dict[str, Any], keys: list[str]) -> str:
     return ""
 
 
+def extract_session_paths_from_keys(payload: dict[str, Any]) -> list[Path]:
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for key in SESSION_PATH_KEYS:
+        value = nested_value(payload, key)
+        if not isinstance(value, str):
+            continue
+        for match in SESSION_PATH_PATTERN.findall(value):
+            path = Path(match).expanduser()
+            path_key = str(path)
+            if path_key not in seen:
+                paths.append(path)
+                seen.add(path_key)
+    return paths
+
+
 def extract_session_paths(payload: dict[str, Any], stdin_text: str) -> list[Path]:
     candidates: list[str] = []
-    for key in [
-        "session_path",
-        "transcript_path",
-        "conversation_path",
-        "rollout_path",
-        "log_path",
-        "reason",
-        "status",
-        "message",
-    ]:
+    for key in SESSION_PATH_KEYS + ["reason", "status", "message"]:
         value = nested_value(payload, key)
         if isinstance(value, str):
             candidates.append(value)
@@ -419,7 +461,12 @@ def session_context_from_file(path: Path) -> tuple[str, str]:
     return latest_user_label, cwd_label
 
 
-def extract_context_label(payload: dict[str, Any], stdin_text: str, allow_process_cwd_fallback: bool = True) -> str:
+def extract_context_label(
+    payload: dict[str, Any],
+    stdin_text: str,
+    allow_process_cwd_fallback: bool = True,
+    max_session_age_seconds: int | None = None,
+) -> str:
     explicit = first_string(
         payload,
         [
@@ -437,6 +484,8 @@ def extract_context_label(payload: dict[str, Any], stdin_text: str, allow_proces
         return label
 
     for path in extract_session_paths(payload, stdin_text):
+        if max_session_age_seconds is not None and not has_fresh_session_path([path], max_session_age_seconds):
+            continue
         user_label, cwd_label = session_context_from_file(path)
         if user_label:
             return user_label
@@ -502,9 +551,17 @@ def done_body(summary: str) -> str:
     return f"Summary: {summary}"
 
 
-def build_message(event: str, stdin_text: str) -> tuple[str, str]:
+def build_message(event: str, stdin_text: str, config: dict[str, Any] | None = None) -> tuple[str, str]:
     payload = parse_stdin_payload(stdin_text)
-    context = extract_context_label(payload, stdin_text, allow_process_cwd_fallback=event != "done")
+    max_session_age = None
+    if event == "done":
+        max_session_age = int((config or DEFAULT_CONFIG).get("done_session_fresh_seconds", 600) or 0)
+    context = extract_context_label(
+        payload,
+        stdin_text,
+        allow_process_cwd_fallback=event != "done",
+        max_session_age_seconds=max_session_age,
+    )
     if event == "permission":
         summary = extract_tool_summary(payload)
         return (
@@ -527,19 +584,46 @@ def build_message(event: str, stdin_text: str) -> tuple[str, str]:
     return ("Codex needs attention", summary)
 
 
-def should_filter_notification(event: str, title: str, payload: dict[str, Any], stdin_text: str) -> bool:
+def notification_filter_reason(
+    event: str,
+    title: str,
+    payload: dict[str, Any],
+    stdin_text: str,
+    config: dict[str, Any] | None = None,
+) -> str:
     if event != "done":
-        return False
+        return ""
     if any(is_internal_prompt_text(value) for value in flatten_strings(payload)):
-        return True
+        return "internal_prompt"
     if has_codex_app_path_context(payload):
-        return True
-    context = extract_context_label(payload, stdin_text, allow_process_cwd_fallback=False)
+        return "codex_app_path"
+
+    session_paths = extract_session_paths_from_keys(payload)
+    max_age = int((config or DEFAULT_CONFIG).get("done_session_fresh_seconds", 600) or 0)
+    if session_paths and not has_fresh_session_path(session_paths, max_age):
+        return "stale_session_path"
+
+    context = extract_context_label(
+        payload,
+        stdin_text,
+        allow_process_cwd_fallback=False,
+        max_session_age_seconds=max_age,
+    )
     if not context:
-        return True
+        return "missing_context"
     if is_low_signal_done_context(context) and not has_non_internal_path_context(payload, stdin_text):
-        return True
-    return False
+        return "low_signal_context"
+    return ""
+
+
+def should_filter_notification(
+    event: str,
+    title: str,
+    payload: dict[str, Any],
+    stdin_text: str,
+    config: dict[str, Any] | None = None,
+) -> bool:
+    return bool(notification_filter_reason(event, title, payload, stdin_text, config=config))
 
 
 def event_group(event: str, config: dict[str, Any]) -> str:
@@ -584,10 +668,13 @@ def cmd_notify(args: argparse.Namespace) -> int:
     config = load_config()
     stdin_text = read_stdin_text()
     payload = parse_stdin_payload(stdin_text)
-    title, body = build_message(args.event, stdin_text)
-    filtered = should_filter_notification(args.event, title, payload, stdin_text)
+    title, body = build_message(args.event, stdin_text, config=config)
+    filter_reason = notification_filter_reason(args.event, title, payload, stdin_text, config=config)
+    filtered = bool(filter_reason)
     skipped = (not filtered) and args.event != "test" and should_cooldown(args.event, config)
     group = event_group(args.event, config)
+    session_paths = extract_session_paths_from_keys(payload) if args.event == "done" else []
+    max_session_age = int(config.get("done_session_fresh_seconds", 600) or 0)
     ok = False if skipped or filtered else send_bark(title, body, config, group=group)
     log_event(
         {
@@ -597,6 +684,9 @@ def cmd_notify(args: argparse.Namespace) -> int:
             "title": title,
             "body": body,
             "skipped_by_filter": filtered,
+            "filter_reason": filter_reason,
+            "session_path_count": len(session_paths),
+            "fresh_session_path_count": count_fresh_session_paths(session_paths, max_session_age),
             "skipped_by_cooldown": skipped,
             "sent": ok,
         }
