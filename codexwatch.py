@@ -246,6 +246,7 @@ def looks_like_codex_app_path(value: str) -> bool:
     normalized = str(value).replace("\\", "/").casefold().rstrip("/")
     return (
         "/appdata/local/programs/codex/app" in normalized
+        or ("/windowsapps/openai.codex_" in normalized and normalized.endswith("/app"))
         or "/applications/codex.app" in normalized
         or normalized.endswith("/codex.app/contents/macos")
     )
