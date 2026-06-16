@@ -16,6 +16,7 @@ This is intentionally small: one Python script, one installer, no dependencies b
 - Applies a 30-second cooldown to `Stop` notifications to reduce noise.
 - Filters low-signal or internal `Stop` events so Codex Desktop helper tasks do not produce misleading completion pushes.
 - Filters stale `Stop` events that point at old session files instead of the task that just finished.
+- Filters cwd-only `Stop` events that have no session path, because Codex Desktop can emit those from inactive project contexts.
 
 ## Install
 
@@ -52,6 +53,7 @@ This is more likely in projectless or file-mentioned Codex Desktop conversations
 CodexWatch now treats `Stop` notifications more strictly than approval notifications:
 
 - `Stop` notifications must have a real thread/session/workspace context.
+- By default, `Stop` notifications must include a session/transcript path; cwd-only completion payloads are filtered.
 - Internal title-generation prompts are filtered.
 - Low-signal completion contexts such as `app` are filtered only when they are not backed by a real non-internal workspace or session path.
 - Filtered notifications are logged with `skipped_by_filter: true`, do not send Bark pushes, and do not refresh the done cooldown.
@@ -62,17 +64,27 @@ If this bug reappears, inspect `~/.codex/codexwatch/events.jsonl` first. A corre
 
 If a completion notification appears during a different active task and names an unrelated old project, the hook payload may have referenced a stale `.codex/sessions/...` transcript. This can happen even when that other project is not running.
 
+Some Codex Desktop helper stops can also carry only a stale `cwd` or workspace path, with no session/transcript path at all. Older versions treated that path as enough context and could send a false push such as `Codex finished: Router VPN` during an unrelated task.
+
 CodexWatch now treats session paths in `Stop` payloads as time-sensitive:
 
+- `require_done_session_path` defaults to `true`.
 - `done_session_fresh_seconds` defaults to `600`.
+- A `Stop` notification without any session/transcript path is filtered with `filter_reason: "missing_session_path"`.
 - A `Stop` notification with one or more session paths is sent only if at least one referenced session file was modified within that freshness window.
 - Stale session-path events are logged with `filter_reason: "stale_session_path"`, `skipped_by_filter: true`, and `"sent": false`.
 - Done events also log `session_path_count` and `fresh_session_path_count` without storing full session paths.
 - Filtered stale events do not refresh the done cooldown, so the real completion notification can still be sent normally.
 
-If you intentionally need a larger window for unusually delayed hooks, raise `done_session_fresh_seconds` in `~/.codex/codexwatch/config.json`.
+If you intentionally need a larger window for unusually delayed hooks, raise `done_session_fresh_seconds` in `~/.codex/codexwatch/config.json`. If your Codex environment genuinely cannot provide session paths for `Stop` hooks, set `require_done_session_path` to `false`, but expect weaker protection against cross-project completion pushes.
 
 ## Changelog
+
+### 2026-06-16
+
+- Required `Stop` notifications to include a session/transcript path by default via `require_done_session_path: true`.
+- Filtered no-session-path completion events with `filter_reason: "missing_session_path"` so stale cwd-only helper stops cannot send unrelated project names such as `Codex finished: Router VPN`.
+- Documented the cwd-only stale project-name failure mode for future agents.
 
 ### 2026-06-14
 

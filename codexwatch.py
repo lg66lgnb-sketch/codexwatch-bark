@@ -80,6 +80,7 @@ DEFAULT_CONFIG = {
     "icon_url": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest/light/codex-color.png",
     "done_cooldown_seconds": 30,
     "done_session_fresh_seconds": 600,
+    "require_done_session_path": True,
 }
 
 
@@ -624,6 +625,8 @@ def notification_filter_reason(
 
     session_paths = extract_session_paths_from_keys(payload)
     max_age = int((config or DEFAULT_CONFIG).get("done_session_fresh_seconds", 600) or 0)
+    if (config or DEFAULT_CONFIG).get("require_done_session_path", True) and not session_paths:
+        return "missing_session_path"
     if session_paths and not has_fresh_session_path(session_paths, max_age):
         return "stale_session_path"
 
