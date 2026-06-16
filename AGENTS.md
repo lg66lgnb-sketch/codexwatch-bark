@@ -18,6 +18,7 @@ Follow these rules when helping a user install or modify it:
 - Preserve filtering for internal title-generation prompts and low-signal completion contexts such as app-only internal events; do not filter a real user workspace just because its folder name is `app`. Filtered events should log `skipped_by_filter: true`, send no Bark push, and not refresh the done cooldown.
 - Keep Windows path handling for `.codex\sessions\...` and bare drive-letter paths when filtering internal/session paths.
 - Keep `require_done_session_path` enabled by default. A cwd/workspace path alone is not enough proof for a `Stop` push because Codex Desktop helper stops can expose stale inactive project paths such as `Router VPN`.
+- If `require_done_session_path` is disabled for an environment with no session paths, still require a strong thread/session/automation title. Do not re-enable cwd/workspace path fallback for `Stop` notifications.
 - Treat session paths in `Stop` payloads as stale unless at least one referenced session file was modified within `done_session_fresh_seconds`, default 600 seconds. This prevents old project names from being pushed during unrelated active work.
 - Preserve `filter_reason`, `session_path_count`, and `fresh_session_path_count` logging so future agents can distinguish `internal_prompt`, `codex_app_path`, `missing_session_path`, `stale_session_path`, `missing_context`, and `low_signal_context` without logging full session paths.
 - After install, run a test push.
