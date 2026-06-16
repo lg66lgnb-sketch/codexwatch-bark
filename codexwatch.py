@@ -24,6 +24,14 @@ SESSION_PATH_PATTERN = re.compile(
     r"(?:~|/|[A-Za-z]:[\\/])[^\s\"']*\.codex[\\/]sessions[\\/][^\s\"']+?\.jsonl"
 )
 LOW_SIGNAL_DONE_CONTEXTS = {"app"}
+IGNORED_CONTEXT_LABELS = {
+    "router",
+    "codex",
+    "openai",
+    "assistant",
+    "system",
+    "macos",
+}
 INTERNAL_PROMPT_MARKERS = (
     "short title for a task",
     "generate a concise ui title",
@@ -227,6 +235,8 @@ def clean_label(value: str, limit: int = 80) -> str:
     value = " ".join(str(value).strip().split())
     value = value.strip(" -:|")
     if not value or looks_like_internal(value):
+        return ""
+    if value.casefold() in IGNORED_CONTEXT_LABELS:
         return ""
     if value.startswith("{") or value.startswith("[") or value.startswith("<"):
         return ""
