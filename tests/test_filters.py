@@ -39,8 +39,22 @@ class DoneFilterTests(unittest.TestCase):
 
         self.assertEqual(reason, "missing_session_path")
 
-    def test_cwd_only_done_can_be_opted_back_in(self) -> None:
+    def test_cwd_only_done_stays_filtered_when_session_path_is_optional(self) -> None:
         payload = {"cwd": r"C:\Users\lg66l\Documents\Router VPN"}
+        config = dict(codexwatch.DEFAULT_CONFIG, require_done_session_path=False)
+
+        reason = codexwatch.notification_filter_reason(
+            "done",
+            "Codex finished: Router VPN",
+            payload,
+            "",
+            config=config,
+        )
+
+        self.assertEqual(reason, "missing_context")
+
+    def test_strong_title_done_can_be_opted_back_in_without_session_path(self) -> None:
+        payload = {"conversation_title": "Router VPN"}
         config = dict(codexwatch.DEFAULT_CONFIG, require_done_session_path=False)
 
         reason = codexwatch.notification_filter_reason(

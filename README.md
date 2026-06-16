@@ -76,7 +76,7 @@ CodexWatch now treats session paths in `Stop` payloads as time-sensitive:
 - Done events also log `session_path_count` and `fresh_session_path_count` without storing full session paths.
 - Filtered stale events do not refresh the done cooldown, so the real completion notification can still be sent normally.
 
-If you intentionally need a larger window for unusually delayed hooks, raise `done_session_fresh_seconds` in `~/.codex/codexwatch/config.json`. If your Codex environment genuinely cannot provide session paths for `Stop` hooks, set `require_done_session_path` to `false`, but expect weaker protection against cross-project completion pushes.
+If you intentionally need a larger window for unusually delayed hooks, raise `done_session_fresh_seconds` in `~/.codex/codexwatch/config.json`. If your Codex environment genuinely cannot provide session paths for `Stop` hooks but does provide a strong thread/session/automation title, set `require_done_session_path` to `false`. Cwd-only payloads should still be filtered as `missing_context`; do not treat a path alone as completion proof.
 
 ## Changelog
 
@@ -84,6 +84,7 @@ If you intentionally need a larger window for unusually delayed hooks, raise `do
 
 - Required `Stop` notifications to include a session/transcript path by default via `require_done_session_path: true`.
 - Filtered no-session-path completion events with `filter_reason: "missing_session_path"` so stale cwd-only helper stops cannot send unrelated project names such as `Codex finished: Router VPN`.
+- Clarified that opting out of the session-path requirement still should not allow cwd-only completion payloads.
 - Documented the cwd-only stale project-name failure mode for future agents.
 
 ### 2026-06-14
