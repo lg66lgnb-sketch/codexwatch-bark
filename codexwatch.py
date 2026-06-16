@@ -56,6 +56,19 @@ SESSION_PATH_KEYS = [
     "rollout_path",
     "log_path",
 ]
+STRONG_CONTEXT_KEYS = [
+    "conversation_title",
+    "thread_title",
+    "chat_title",
+    "session_title",
+    "automation_title",
+    "automation_name",
+]
+GENERIC_CONTEXT_KEYS = [
+    "project_name",
+    "workspace_name",
+    "title",
+]
 
 DEFAULT_CONFIG = {
     "bark_server": "https://api.day.app",
@@ -250,6 +263,10 @@ def is_internal_prompt_text(value: str) -> bool:
 
 def is_low_signal_done_context(value: str) -> bool:
     return value.strip().casefold() in LOW_SIGNAL_DONE_CONTEXTS
+
+
+def is_automation_context(value: str) -> bool:
+    return value.strip().casefold().startswith("automation:")
 
 
 def looks_like_codex_app_path(value: str) -> bool:
@@ -476,22 +493,18 @@ def extract_context_label(
     payload: dict[str, Any],
     stdin_text: str,
     allow_process_cwd_fallback: bool = True,
+    allow_generic_titles: bool = True,
+    allow_payload_path_context: bool = True,
     max_session_age_seconds: int | None = None,
 ) -> str:
-    explicit = first_string(
-        payload,
-        [
-            "conversation_title",
-            "thread_title",
-            "chat_title",
-            "session_title",
-            "project_name",
-            "workspace_name",
-            "title",
-        ],
-    )
+    explicit = first_string(payload, STRONG_CONTEXT_KEYS)
     label = clean_label(explicit)
     if label:
+        return label
+
+    generic = first_string(payload, GENERIC_CONTEXT_KEYS)
+    label = clean_label(generic)
+    if label and (allow_generic_titles or is_automation_context(label)):
         return label
 
     for path in extract_session_paths(payload, stdin_text):
@@ -503,12 +516,10 @@ def extract_context_label(
         if cwd_label:
             return cwd_label
 
-    label = first_path_basename(
-        payload,
-        PATH_CONTEXT_KEYS,
-    )
-    if label:
-        return label
+    if allow_payload_path_context:
+        label = first_path_basename(payload, PATH_CONTEXT_KEYS)
+        if label:
+            return label
 
     if allow_process_cwd_fallback:
         return basename_label(str(Path.cwd()))
@@ -571,6 +582,8 @@ def build_message(event: str, stdin_text: str, config: dict[str, Any] | None = N
         payload,
         stdin_text,
         allow_process_cwd_fallback=event != "done",
+        allow_generic_titles=event != "done",
+        allow_payload_path_context=event != "done",
         max_session_age_seconds=max_session_age,
     )
     if event == "permission":
@@ -618,6 +631,8 @@ def notification_filter_reason(
         payload,
         stdin_text,
         allow_process_cwd_fallback=False,
+        allow_generic_titles=False,
+        allow_payload_path_context=False,
         max_session_age_seconds=max_age,
     )
     if not context:
