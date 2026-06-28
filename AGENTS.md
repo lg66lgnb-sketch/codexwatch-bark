@@ -4,7 +4,7 @@ This repository installs CodexWatch Bark, a small global Codex hooks -> Bark not
 
 Follow these rules when helping a user install or modify it:
 
-- Read `README.md` and `SECURITY.md` first.
+- Read `README.md`, `SECURITY.md`, and `CHANGELOG.md` first.
 - Never overwrite an existing `~/.codex/hooks.json`; merge only CodexWatch hook entries.
 - Back up `~/.codex/hooks.json` before editing it.
 - Store Bark keys only in `~/.codex/codexwatch/config.json` with `600` permissions.

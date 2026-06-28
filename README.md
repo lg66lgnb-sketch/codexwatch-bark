@@ -1,27 +1,42 @@
 # CodexWatch Bark
 
-Global Codex hooks that send Bark push notifications to your iPhone / Apple Watch when Codex needs approval or finishes a turn.
+> [中文版见下方 / Chinese version below](#chinese-version)
 
-This is intentionally small: one Python script, one installer, no dependencies beyond Python 3 and Bark.
+## Ask Another Agent To Install It
+
+Send this prompt to your agent:
+
+```text
+Please read https://github.com/lg66lgnb-sketch/codexwatch-bark and help me set it up. Before making changes, check README.md, AGENTS.md, SECURITY.md, and CHANGELOG.md. Do not overwrite my existing ~/.codex/hooks.json; merge the CodexWatch hooks only.
+```
+
+CodexWatch Bark sends Codex approval and completion events to Bark, so they can appear on your iPhone and Apple Watch.
+
+It uses one Python script, one installer, and no third-party Python packages.
 
 ## What It Does
 
-- `PermissionRequest` -> Bark notification in the `Codex Approval` group.
-- `Stop` -> Bark notification in the `Codex Done` group.
-- Uses Bark V2 `/push` JSON API.
-- Uses `level=timeSensitive`.
-- Adds a Codex icon by default.
-- Adds a short thread/context label to approval and completion notifications when available.
-- Does not cooldown approval requests, so back-to-back approvals are not missed.
-- Applies a 30-second cooldown to `Stop` notifications to reduce noise.
-- Filters low-signal or internal `Stop` events so Codex Desktop helper tasks do not produce misleading completion pushes.
-- Filters stale `Stop` events that point at old session files instead of the task that just finished.
-- Filters cwd-only `Stop` events that have no session path, because Codex Desktop can emit those from inactive project contexts.
+| Codex event | Bark notification |
+| --- | --- |
+| `PermissionRequest` | Immediate alert in `Codex Approval`; no cooldown |
+| `Stop` | Completion alert in `Codex Done`; 30-second cooldown |
+
+Notifications use Bark's V2 API, `timeSensitive` level, a Codex icon, and a short thread label when available.
+
+Completion events are filtered more strictly because Codex Desktop can emit internal or stale `Stop` events. By default, a completion push requires a recent session/transcript path. Cwd-only, stale, internal-app, and low-signal events are logged but not pushed.
+
+## Requirements
+
+- Codex with global hooks support
+- macOS with Bash and `/usr/bin/python3`
+- Bark installed on your iPhone
+
+The filter also recognizes Windows Codex and session paths, but `install.sh` targets macOS.
 
 ## Install
 
 1. Install Bark on your iPhone.
-2. In the Bark app, copy a sample URL from the home screen. The `Icon` or `Notification Grouping` examples are ideal.
+2. From Bark's home screen, copy a sample URL. The `Icon` or `Notification Grouping` example is ideal.
 3. Run:
 
 ```bash
@@ -30,91 +45,58 @@ cd codexwatch-bark
 bash install.sh 'https://api.day.app/YOUR_BARK_KEY/Notification%20Grouping?group=CodexWatch'
 ```
 
-You can also run `bash install.sh` and paste the Bark URL when prompted.
+You can also run `bash install.sh` without an argument and paste the URL when prompted.
 
 The installer:
 
-- copies `codexwatch.py` to `~/.codex/codexwatch/codexwatch.py`
-- stores your Bark key in `~/.codex/codexwatch/config.json`
-- backs up `~/.codex/hooks.json`
-- merges CodexWatch entries into global Codex hooks
-- sends a test Bark notification
+- installs the notifier in `~/.codex/codexwatch/`
+- stores the Bark key in `config.json` with `600` permissions
+- backs up and merges `~/.codex/hooks.json`
+- sends a test notification
 
-New or restarted Codex sessions may ask you to review/trust hooks before they run.
+Restart Codex after installation. A new session may ask you to review or trust the hooks.
 
-## Troubleshooting
+## Test
 
-### Extra `Codex finished: app` Notifications
+Send a test push:
 
-Codex Desktop can run internal helper turns, such as UI title generation, that may also fire global `Stop` hooks. On some Windows installs those internal stops can expose only a low-signal context like `app`; older CodexWatch versions used the current process directory as a fallback and could send misleading `Codex finished: app` pushes.
+```bash
+/usr/bin/python3 ~/.codex/codexwatch/codexwatch.py test
+```
 
-This is more likely in projectless or file-mentioned Codex Desktop conversations, where internal app-level turns may run with a Codex installation cwd such as `C:\Program Files\WindowsApps\OpenAI.Codex_...\app`.
-
-CodexWatch now treats `Stop` notifications more strictly than approval notifications:
-
-- `Stop` notifications must have a real thread/session/workspace context.
-- By default, `Stop` notifications must include a session/transcript path; cwd-only completion payloads are filtered.
-- Internal title-generation prompts are filtered.
-- Low-signal completion contexts such as `app` are filtered only when they are not backed by a real non-internal workspace or session path.
-- Filtered notifications are logged with `skipped_by_filter: true`, do not send Bark pushes, and do not refresh the done cooldown.
-
-If this bug reappears, inspect `~/.codex/codexwatch/events.jsonl` first. A correct filtered event should have `"sent": false` and `"skipped_by_filter": true`.
-
-### Extra `Codex finished: Other Project` Notifications
-
-If a completion notification appears during a different active task and names an unrelated old project, the hook payload may have referenced a stale `.codex/sessions/...` transcript. This can happen even when that other project is not running.
-
-Some Codex Desktop helper stops can also carry only a stale `cwd` or workspace path, with no session/transcript path at all. Older versions treated that path as enough context and could send a false push such as `Codex finished: Router VPN` during an unrelated task.
-
-CodexWatch now treats session paths in `Stop` payloads as time-sensitive:
-
-- `require_done_session_path` defaults to `true`.
-- `done_session_fresh_seconds` defaults to `600`.
-- A `Stop` notification without any session/transcript path is filtered with `filter_reason: "missing_session_path"`.
-- A `Stop` notification with one or more session paths is sent only if at least one referenced session file was modified within that freshness window.
-- Stale session-path events are logged with `filter_reason: "stale_session_path"`, `skipped_by_filter: true`, and `"sent": false`.
-- Done events also log `session_path_count` and `fresh_session_path_count` without storing full session paths.
-- Filtered stale events do not refresh the done cooldown, so the real completion notification can still be sent normally.
-
-If you intentionally need a larger window for unusually delayed hooks, raise `done_session_fresh_seconds` in `~/.codex/codexwatch/config.json`. If your Codex environment genuinely cannot provide session paths for `Stop` hooks but does provide a strong thread/session/automation title, set `require_done_session_path` to `false`. Cwd-only payloads should still be filtered as `missing_context`; do not treat a path alone as completion proof.
-
-## Changelog
-
-### 2026-06-16
-
-- Required `Stop` notifications to include a session/transcript path by default via `require_done_session_path: true`.
-- Filtered no-session-path completion events with `filter_reason: "missing_session_path"` so stale cwd-only helper stops cannot send unrelated project names such as `Codex finished: Router VPN`.
-- Clarified that opting out of the session-path requirement still should not allow cwd-only completion payloads.
-- Documented the cwd-only stale project-name failure mode for future agents.
-
-### 2026-06-14
-
-- Added stale session-path filtering for `Stop` notifications to prevent cross-thread completion pushes such as `Codex finished: Router VPN` during unrelated work.
-- Added `filter_reason` to local event logs for filtered notifications.
-- Added `done_session_fresh_seconds`, default `600`, to control how fresh a referenced session file must be for completion pushes.
-- Recognized Windows packaged Codex install paths such as `C:\Program Files\WindowsApps\OpenAI.Codex_...\app` as internal app contexts.
-
-### 2026-06-12
-
-- Added Windows-aware `.codex/sessions/...` path detection and filtering.
-- Stopped using the notifier process directory as the fallback context for `Stop` notifications.
-- Filtered internal Codex Desktop helper `Stop` events, including low-signal `Codex finished: app` notifications.
-
-## Test A Real Approval
-
-Start a new interactive Codex session with approval prompts enabled, then ask it to run a harmless command:
+To test a real approval, start Codex with approval prompts:
 
 ```bash
 codex --ask-for-approval untrusted --sandbox read-only
 ```
 
-Prompt:
+Then ask it:
 
 ```text
 For this approval test, try to run exactly this shell command: mkdir -p /tmp/codexwatch-approval-test. Do not do anything else.
 ```
 
-When Codex shows the approval prompt, you should also receive a Bark notification.
+## Troubleshooting
+
+Check:
+
+```text
+~/.codex/codexwatch/events.jsonl
+```
+
+A filtered event has `"skipped_by_filter": true` and `"sent": false`. Common reasons are `missing_session_path`, `stale_session_path`, `missing_context`, `internal_prompt`, and `codex_app_path`.
+
+Relevant settings in `~/.codex/codexwatch/config.json`:
+
+| Setting | Default | Purpose |
+| --- | ---: | --- |
+| `done_cooldown_seconds` | `30` | Reduces duplicate completion pushes |
+| `done_session_fresh_seconds` | `600` | Rejects old session references |
+| `require_done_session_path` | `true` | Rejects cwd-only completion events |
+
+Keep `require_done_session_path` enabled unless your Codex environment cannot provide session paths. Disabling it still requires a strong thread, session, or automation title.
+
+Implementation history and past false-notification incidents are documented in [CHANGELOG.md](CHANGELOG.md).
 
 ## Uninstall
 
@@ -122,12 +104,120 @@ When Codex shows the approval prompt, you should also receive a Bark notificatio
 bash uninstall.sh
 ```
 
-This removes only CodexWatch hook entries from `~/.codex/hooks.json`. It leaves `~/.codex/codexwatch/` in place so you can keep logs/config or delete it manually.
+This removes only CodexWatch entries from `~/.codex/hooks.json`. Local config and logs remain in `~/.codex/codexwatch/`.
 
-## Ask Another Agent To Install It
+## Security
 
-Use this short prompt:
+Your Bark key stays in `~/.codex/codexwatch/config.json`. Notification title and body are sent to your configured Bark server; approval alerts may include a short command, path, URL, or tool summary. See [SECURITY.md](SECURITY.md).
+
+---
+
+## Chinese Version
+
+### 让另一个 Agent 帮你安装
+
+把这段指令发给你的 Agent：
 
 ```text
-Please read https://github.com/lg66lgnb-sketch/codexwatch-bark and give me instructions to set it up. Before making changes, check README.md, AGENTS.md, and SECURITY.md. Do not overwrite my existing ~/.codex/hooks.json; merge the CodexWatch hooks only.
+请阅读 https://github.com/lg66lgnb-sketch/codexwatch-bark 并帮我完成配置。修改前先检查 README.md、AGENTS.md、SECURITY.md 和 CHANGELOG.md。不要覆盖我现有的 ~/.codex/hooks.json，只合并 CodexWatch 的 hooks。
 ```
+
+CodexWatch Bark 会把 Codex 的权限审批和任务完成事件发送到 Bark，让通知显示在 iPhone 和 Apple Watch 上。
+
+项目只有一个 Python 脚本和一个安装器，不依赖第三方 Python 包。
+
+### 功能
+
+| Codex 事件 | Bark 通知 |
+| --- | --- |
+| `PermissionRequest` | 立即发送到 `Codex Approval`，不设冷却 |
+| `Stop` | 发送到 `Codex Done`，冷却 30 秒 |
+
+通知使用 Bark V2 API、`timeSensitive` 级别、Codex 图标，并在可用时显示简短的会话名称。
+
+Codex Desktop 可能产生内部或过期的 `Stop` 事件，因此完成通知会严格过滤。默认只有带近期 session/transcript 路径的完成事件才会推送；仅有 cwd、过期 session、Codex 内部任务和低信息事件只记日志，不推送。
+
+### 环境要求
+
+- 支持全局 hooks 的 Codex
+- 带有 Bash 和 `/usr/bin/python3` 的 macOS
+- iPhone 已安装 Bark
+
+过滤器也能识别 Windows 的 Codex 和 session 路径，但 `install.sh` 面向 macOS。
+
+### 安装
+
+1. 在 iPhone 上安装 Bark。
+2. 从 Bark 首页复制一条示例 URL，推荐 `Icon` 或 `Notification Grouping`。
+3. 运行：
+
+```bash
+git clone https://github.com/lg66lgnb-sketch/codexwatch-bark.git
+cd codexwatch-bark
+bash install.sh 'https://api.day.app/YOUR_BARK_KEY/Notification%20Grouping?group=CodexWatch'
+```
+
+也可以直接运行 `bash install.sh`，再按提示粘贴 URL。
+
+安装器会：
+
+- 把通知脚本安装到 `~/.codex/codexwatch/`
+- 以 `600` 权限保存 Bark key
+- 备份并合并 `~/.codex/hooks.json`
+- 发送一条测试通知
+
+安装后重启 Codex。新会话可能会要求你检查或信任 hooks。
+
+### 测试
+
+发送测试通知：
+
+```bash
+/usr/bin/python3 ~/.codex/codexwatch/codexwatch.py test
+```
+
+测试真实权限审批：
+
+```bash
+codex --ask-for-approval untrusted --sandbox read-only
+```
+
+然后输入：
+
+```text
+For this approval test, try to run exactly this shell command: mkdir -p /tmp/codexwatch-approval-test. Do not do anything else.
+```
+
+### 排查
+
+查看日志：
+
+```text
+~/.codex/codexwatch/events.jsonl
+```
+
+被过滤的事件会显示 `"skipped_by_filter": true` 和 `"sent": false`。常见原因包括 `missing_session_path`、`stale_session_path`、`missing_context`、`internal_prompt` 和 `codex_app_path`。
+
+`~/.codex/codexwatch/config.json` 中的相关配置：
+
+| 配置 | 默认值 | 作用 |
+| --- | ---: | --- |
+| `done_cooldown_seconds` | `30` | 减少重复的完成通知 |
+| `done_session_fresh_seconds` | `600` | 拒绝过期的 session 引用 |
+| `require_done_session_path` | `true` | 拒绝只有 cwd 的完成事件 |
+
+除非你的 Codex 环境无法提供 session 路径，否则应保持 `require_done_session_path` 开启。关闭后，事件仍需提供可靠的 thread、session 或 automation 标题。
+
+过滤逻辑的历史和过往误报记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+### 卸载
+
+```bash
+bash uninstall.sh
+```
+
+它只会移除 `~/.codex/hooks.json` 中的 CodexWatch 条目，本地配置和日志仍保留在 `~/.codex/codexwatch/`。
+
+### 安全
+
+Bark key 保存在 `~/.codex/codexwatch/config.json`。通知标题和正文会发送到你配置的 Bark 服务器；权限通知可能包含简短的命令、路径、URL 或工具摘要。详见 [SECURITY.md](SECURITY.md)。
